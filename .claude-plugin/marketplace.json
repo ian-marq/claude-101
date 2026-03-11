@@ -1,15 +1,17 @@
 {
   "name": "claude-101",
   "owner": {
-    "name": "Ian Park",
-    "email": "ian@marqvision.com"
+    "name": "Ian Park"
   },
   "plugins": [
     {
       "name": "claude-101",
       "description": "Claude Code 101 onboarding plugin. Interactive hands-on guide for beginners.",
       "version": "1.0.0",
-      "source": "."
+      "source": {
+        "source": "github",
+        "repo": "ian-marq/claude-101"
+      }
     }
   ]
 }
