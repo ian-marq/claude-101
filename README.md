@@ -6,8 +6,8 @@ Interactive onboarding plugin for Claude Code beginners.
 
 ```bash
 # In Claude Code:
-/plugin marketplace add ianpark-dev/claude-101
-/plugin install claude-101@ianpark-dev-claude-101
+/plugin marketplace add ian-marq/claude-101
+/plugin install claude-101@ian-marq-claude-101
 ```
 
 ## Usage

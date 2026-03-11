@@ -1,4 +1,9 @@
 {
+  "name": "claude-101",
+  "owner": {
+    "name": "Ian Park",
+    "email": "ian@marqvision.com"
+  },
   "plugins": [
     {
       "name": "claude-101",
