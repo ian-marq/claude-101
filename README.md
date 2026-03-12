@@ -7,13 +7,13 @@ Interactive onboarding plugin for Claude Code beginners.
 ```bash
 # In Claude Code:
 /plugin marketplace add ian-marq/claude-101
-/plugin install claude-101@ian-marq-claude-101
+/plugin install cc101@ian-marq-claude-101
 ```
 
 ## Usage
 
 ```bash
-/claude-101:onboarding
+/cc101:onboarding
 ```
 
 Claude will walk you through the basics step by step:
