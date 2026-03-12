@@ -1,11 +1,11 @@
 {
-  "name": "claude-101",
+  "name": "cc101",
   "owner": {
     "name": "Ian Park"
   },
   "plugins": [
     {
-      "name": "claude-101",
+      "name": "cc101",
       "description": "Claude Code 101 onboarding plugin. Interactive hands-on guide for beginners.",
       "version": "1.0.0",
       "source": "."
