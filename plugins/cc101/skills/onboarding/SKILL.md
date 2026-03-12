@@ -1,7 +1,6 @@
 ---
 name: onboarding
 description: Claude Code 101 interactive onboarding. Guides beginners through hands-on exercises to learn Claude Code basics step by step.
-disable-model-invocation: true
 ---
 
 # Claude Code 101 Onboarding
