@@ -37,15 +37,45 @@ const now = () => Date.now();
 // ── 툴 → 건물 ──────────────────────────────────────────────────────────────
 //  library 도서관(조사) · site 공사장(코드 짓기) · factory 공장(명령 실행)
 //  hall 마을회관(지시/대기) · post 우체국(외부 서비스) · inn 여관(쉼)
-function buildingFor(tool) {
-  if (!tool) return 'inn';
-  if (/^(Read|Grep|Glob|LS|NotebookRead|ToolSearch|WebSearch|WebFetch)$/.test(tool)) return 'library';
-  if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(tool)) return 'site';
-  if (/^(Bash|BashOutput|KillShell|Monitor|TaskStop|PowerShell)$/.test(tool)) return 'factory';
-  if (/^(Agent|Task|Workflow|SendMessage|TaskCreate|TaskUpdate|EnterPlanMode|ExitPlanMode|AskUserQuestion)$/.test(tool)) return 'hall';
-  return 'post'; // mcp__*, Skill, Artifact …
+// ── 툴 → 하는 일(kind). 화면에서 kind 가 장소(건물/야외)로 바뀐다 ─────────────
+//  read 도서관 · search 들판 · web 전망대 · edit 공방 · write 공터(새 집 짓기)
+//  run 공장 · test 훈련장 · git 부두 · plan/delegate 회관 · mcp 우체국
+const TEST_CMD = /(^|&&|;|\|)\s*((npm|pnpm|yarn|bun)\s+(run\s+)?test\b|make\s+test\b|(npx\s+|uv\s+run\s+|python3?\s+-m\s+)?(pytest|jest|vitest|mocha|rspec|phpunit|tox|nox)\b|go\s+test\b|cargo\s+test\b|(npx\s+)?playwright\s+test\b)/;
+const DATA_CMD = /\b(bq|psql|duckdb|sqlite3|snowsql|dbt|spark-submit|clickhouse)\b/;
+function kindOf(tool, input) {
+  if (!tool) return null;
+  if (/^(Read|NotebookRead)$/.test(tool)) return 'read';
+  if (/^(Grep|Glob|LS|ToolSearch)$/.test(tool)) return 'search';
+  if (/^(WebSearch|WebFetch)$/.test(tool)) return 'web';
+  if (/^(Edit|MultiEdit|NotebookEdit)$/.test(tool)) return 'edit';
+  if (tool === 'Write') return 'write';
+  if (/^(Bash|PowerShell)$/.test(tool)) {
+    const c = String((input && input.command) || '');
+    if (/^\s*(git|gh)\b|&&\s*git\b/.test(c)) return 'git';
+    if (TEST_CMD.test(c)) return 'test';
+    return 'run';
+  }
+  if (/^(BashOutput|KillShell|Monitor|TaskStop)$/.test(tool)) return 'run';
+  if (/^(Agent|Task|Workflow|SendMessage)$/.test(tool)) return 'delegate';
+  if (/^(TodoWrite|TaskCreate|TaskUpdate|TaskList|EnterPlanMode|ExitPlanMode|AskUserQuestion)$/.test(tool)) return 'plan';
+  return 'mcp'; // mcp__*, Skill, Artifact …
 }
 const RESEARCHERS = /^(Explore|Plan|claude-code-guide|research.*)$/i;
+
+// 마을 성격: 많이 하는 일에 따라. 툴 15번 쓰면 정해지고 60/200번에 한 번씩 다시 봄
+const ARCHETYPES = ['scholar', 'artisan', 'industrial', 'harbor', 'courier', 'miner'];
+function archetypeOf(v) {
+  const m = v.mix, n = (k) => m[k] || 0;
+  const score = {
+    scholar: n('read') + n('search') + n('web') * .5,
+    artisan: n('edit') + n('write') * 1.2,
+    industrial: n('run') + n('test') * 1.2,
+    harbor: n('git') * 2.5 + n('web'),
+    courier: n('mcp') * 1.5 + n('delegate') * 2.5,
+    miner: v.dataScore * 2,
+  };
+  return Object.entries(score).sort((a, b) => b[1] - a[1])[0][0];
+}
 
 function toolDetail(input) {
   if (!input || typeof input !== 'object') return '';
@@ -54,6 +84,8 @@ function toolDetail(input) {
   const str = String(s).replace(/\s+/g, ' ');
   return str.length > 60 ? str.slice(0, 57) + '…' : str;
 }
+
+function hashStr(s) { let h = 2166136261; for (const c of String(s)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
 
 // ── 마을(세션) 모델: 로컬 jsonl 과 클라우드 이벤트가 같은 함수로 들어온다 ───────
 let effectSeq = 0;
@@ -65,6 +97,7 @@ function newVillage(id, where) {
     files: new Map(),     // 고친 파일 = 마을의 집
     students: new Map(),  // 서브에이전트 = 학생 (key: Agent tool_use id)
     effects: [], errorAt: 0, compactAt: 0, seen: new Set(),
+    kind: null, mix: {}, log: [], todos: 0, tests: { pass: 0, fail: 0 }, dataScore: 0, archetype: null, archAt: 0,
   };
 }
 
@@ -79,11 +112,22 @@ function onToolUse(v, b, ts, parent) {
   // 서브에이전트 안에서 일어난 툴 → 학생이 움직임
   if (parent) {
     const st = v.students.get(parent);
-    if (st) { st.tool = b.name; st.detail = toolDetail(input); st.at = ts; }
+    if (st) { st.tool = b.name; st.kind = kindOf(b.name, input); st.detail = toolDetail(input); st.at = ts; }
     return;
   }
-  v.tool = b.name; v.detail = toolDetail(input); v.toolAt = ts; v.toolCount++;
-  v.pending.set(b.id, { name: b.name, at: ts });
+  const kind = kindOf(b.name, input);
+  v.tool = b.name; v.kind = kind; v.detail = toolDetail(input); v.toolAt = ts; v.toolCount++;
+  v.mix[kind] = (v.mix[kind] || 0) + 1;
+  v.log.push({ kind, tool: b.name, detail: toolDetail(input), at: ts });
+  if (v.log.length > 8) v.log.shift();
+  v.pending.set(b.id, { name: b.name, kind, at: ts });
+  if (b.name === 'TodoWrite' && Array.isArray(input.todos)) v.todos = input.todos.filter((x) => x.status !== 'completed').length;
+  if (b.name === 'TaskCreate') v.todos++;
+  if (b.name === 'TaskUpdate' && input.status === 'completed') v.todos = Math.max(0, v.todos - 1);
+  if (DATA_CMD.test(String(input.command || ''))) v.dataScore += 2;
+  const fpath = String(input.file_path || input.notebook_path || '');
+  if (/\.(sql|ipynb|csv|parquet|dbt)$/i.test(fpath)) v.dataScore += 1;
+  if (b.name === 'Write' && fpath) effect(v, 'build', path.basename(fpath), ts);
   if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(b.name)) {
     const fp = input.file_path || input.notebook_path;
     if (fp) {
@@ -110,7 +154,8 @@ function onToolResult(v, b, ts, parent) {
   v.pending.delete(b.tool_use_id);
   const st = v.students.get(b.tool_use_id);
   if (st) st.resultAt = ts; // 백그라운드 에이전트는 결과가 바로 와서, 끝남 판정은 따로 함
-  if (b.is_error) { v.errorAt = ts; if (p && p.name === 'Bash') effect(v, 'boom', '', ts); }
+  if (p && p.kind === 'test') { v.tests[b.is_error ? 'fail' : 'pass']++; effect(v, b.is_error ? 'testfail' : 'testpass', '', ts); }
+  else if (b.is_error) { v.errorAt = ts; if (p && p.name === 'Bash') effect(v, 'boom', '', ts); }
 }
 
 function onAssistant(v, m, ts, parent) {
@@ -390,7 +435,7 @@ function studentView(st) {
   if (!st.done && !st.hasMeta && st.resultAt && t - Math.max(st.at, st.resultAt) > 15000) { st.done = true; st.doneAt = t; }
   return {
     id: st.id, type: st.type, desc: st.desc, tool: st.tool, detail: st.detail, done: st.done,
-    building: st.tool ? buildingFor(st.tool) : RESEARCHERS.test(st.type) ? 'library' : 'site',
+    kind: st.kind || (RESEARCHERS.test(st.type) ? 'read' : 'edit'),
   };
 }
 
@@ -398,11 +443,18 @@ function view(v, status, extra) {
   const t = now();
   for (const [k, st] of v.students) if (st.done && t - st.doneAt > 25000) v.students.delete(k);
   const max = v.ctxMax || (v.ctxUsed > 200000 ? 1000000 : 200000);
-  const building = status === 'waiting' || status === 'done' || status === 'failed' ? 'hall'
-    : status === 'working' ? buildingFor(v.tool) : 'inn';
+  const kind = status === 'waiting' ? 'wait' : status === 'done' || status === 'failed' ? 'done'
+    : status === 'working' ? (v.kind || 'plan') : 'idle';
+  const total = v.toolCount;
+  if (!v.archetype || (total >= 15 && v.archAt < 15) || (total >= 60 && v.archAt < 60) || (total >= 200 && v.archAt < 200)) {
+    // 툴을 거의 안 썼으면 레포 이름으로 정함 (같은 레포는 늘 같은 마을)
+    v.archetype = total >= 15 ? archetypeOf(v) : ARCHETYPES[hashStr(v.repo || v.name || v.id) % ARCHETYPES.length];
+    v.archAt = total;
+  }
   const houses = [...v.files.values()].sort((a, b) => a.at - b.at).map((f) => ({ name: f.name, path: f.path, edits: f.edits }));
   return {
-    id: v.id, where: v.where, status, building, tool: status === 'working' ? v.tool : null,
+    id: v.id, where: v.where, status, kind, tool: status === 'working' ? v.tool : null,
+    archetype: v.archetype, seed: hashStr(v.repo || v.name || v.id), mix: v.mix, log: v.log.slice(-5), todos: v.todos, tests: v.tests,
     detail: status === 'working' ? v.detail : '',
     name: v.name, title: v.title || v.lastPrompt || '(제목 없음)', repo: v.repo, branch: v.branch,
     ctx: v.ctxUsed ? { used: v.ctxUsed, max, pct: Math.min(1, v.ctxUsed / max) } : null,
@@ -440,42 +492,44 @@ function snapshot() {
 }
 
 // ── 데모: 정해진 각본대로 가짜 이벤트를 같은 모델에 흘려 넣는다 ───────────────
-const demo = { villages: [], step: 0 };
+const demo = { villages: [] };
 function demoInit() {
-  const mk = (id, where, name, title, script, ctx) => {
+  const mk = (id, where, name, title, script, ctx, archetype) => {
     const v = newVillage(id, where);
     Object.assign(v, { name, title, repo: name, branch: 'main', script, i: 0, status: 'working', ctxUsed: ctx, ctxMax: where === 'cloud' ? 1000000 : 200000, lastAt: now() });
+    if (archetype) { v.archetype = archetype; v.archAt = 999; }
     if (where === 'cloud') v.url = 'https://claude.ai/code/' + id;
     return v;
   };
-  const R = (n, x) => ['tool', n, n === 'Bash' ? { command: x } : n === 'WebSearch' ? { query: x } : n === 'Grep' ? { pattern: x } : { file_path: x }];
-  const research = [['agent', 'Explore', '코드베이스 조사'], ['agent', 'Explore', '기존 테스트 찾기'], R('Grep', 'useAuth'), R('Read', 'src/auth/session.ts'), ['sub', 0, 'Glob'], ['sub', 1, 'Read'], R('WebSearch', 'oauth pkce'), ['sub', 0, 'Grep'], ['subdone', 0], ['subdone', 1]];
-  const build = [R('Edit', 'src/auth/session.ts'), R('Write', 'src/auth/pkce.ts'), R('Edit', 'src/auth/login.tsx'), R('Bash', 'npm test'), ['boom'], R('Edit', 'src/auth/pkce.ts'), R('Bash', 'npm test'), R('Write', 'src/auth/pkce.test.ts'), R('Bash', 'git commit -m "feat: pkce"'), R('Bash', 'git push'), ['wait', 'git push 허락 대기'], ['done', '끝! PR 확인해 주세요'], ['idle']];
+  const T = (n, x) => ['tool', n, n === 'Bash' ? { command: x } : /Web/.test(n) ? { query: x, url: x } : /Grep|Glob/.test(n) ? { pattern: x } : n === 'TodoWrite' ? { todos: Array.from({ length: x }, () => ({ status: 'pending' })) } : { file_path: x }];
+  const research = [['agent', 'Explore', '코드베이스 조사'], ['agent', 'Explore', '기존 테스트 찾기'], T('Grep', 'useAuth'), ['sub', 0, 'Glob'], ['sub', 1, 'Read'], T('Read', 'src/auth/session.ts'), T('WebSearch', 'oauth pkce 표준'), ['sub', 0, 'Grep'], T('TodoWrite', 4), ['subdone', 0], ['subdone', 1]];
+  const build = [T('Edit', 'src/auth/session.ts'), T('Write', 'src/auth/pkce.ts'), T('Edit', 'src/auth/login.tsx'), T('Bash', 'npm test'), ['result', true], T('Edit', 'src/auth/pkce.ts'), T('Bash', 'npm test'), ['result', false], T('Write', 'src/auth/pkce.test.ts'), T('Bash', 'git commit -m "feat: pkce"'), T('Bash', 'git push'), ['wait', 'git push 허락 대기'], T('Bash', 'gh pr create'), ['done', '끝! PR 확인해 주세요'], ['idle']];
   demo.villages = [
-    mk('demo-1', 'local', 'web-app', '로그인 PKCE 붙이기', [...research, ...build], 60000),
-    mk('demo-2', 'local', 'api-server', 'N+1 쿼리 수정', [R('Grep', 'findMany'), R('Read', 'src/repo/user.ts'), R('Edit', 'src/repo/user.ts'), R('Edit', 'src/repo/order.ts'), R('Bash', 'pnpm test repo'), ['wait', 'Bash 실행 허락 대기'], R('Bash', 'git commit -m fix'), ['done', 'N+1 해결']], 150000),
-    mk('demo-3', 'local', 'notes', '회의록 정리', [['idle']], 20000),
-    mk('session_demo_c1', 'cloud', 'infra', 'CI 고치기', [['agent', 'general-purpose', 'CI 로그 분석'], ['sub', 0, 'Bash'], R('Read', '.github/workflows/ci.yml'), ['sub', 0, 'Read'], R('Edit', '.github/workflows/ci.yml'), ['subdone', 0], R('Bash', 'gh pr create'), R('mcp__github__get_job_logs', ''), ['done', 'PR #12 올림, 리뷰 대기']], 400000),
-    mk('session_demo_c2', 'cloud', 'data', '마이그레이션 계획', [R('Read', 'db/schema.sql'), R('WebFetch', 'https://docs'), ['wait', 'A안/B안 중 골라주세요']], 700000),
+    mk('demo-1', 'local', 'web-app', '로그인 PKCE 붙이기', [...research, ...build], 60000, 'artisan'),
+    mk('demo-2', 'local', 'api-server', 'N+1 쿼리 수정', [T('Grep', 'findMany'), T('Read', 'src/repo/user.ts'), T('Bash', 'pnpm build'), T('Edit', 'src/repo/user.ts'), T('Edit', 'src/repo/order.ts'), T('Bash', 'pnpm test repo'), ['result', false], ['wait', 'Bash 실행 허락 대기'], T('Bash', 'git commit -m fix'), ['done', 'N+1 해결']], 150000, 'industrial'),
+    mk('demo-3', 'local', 'paper-notes', '논문 읽고 정리', [T('WebFetch', 'arxiv.org/abs/2401'), T('Read', 'notes/attention.md'), T('Grep', 'transformer'), T('Read', 'notes/rope.md'), ['idle']], 20000, 'scholar'),
+    mk('session_demo_c1', 'cloud', 'infra', 'CI 고치기', [['agent', 'general-purpose', 'CI 로그 분석'], ['sub', 0, 'Bash'], T('mcp__github__get_job_logs', ''), ['sub', 0, 'Read'], T('Edit', '.github/workflows/ci.yml'), ['subdone', 0], T('Bash', 'git push'), T('mcp__slack__send_message', '#dev'), ['done', 'PR #12 올림, 리뷰 대기']], 400000, 'courier'),
+    mk('session_demo_c2', 'cloud', 'growth-data', '이탈 분석 쿼리', [T('Read', 'models/churn.sql'), T('Bash', 'bq query --use_legacy_sql=false'), T('Write', 'analysis/churn.ipynb'), T('WebFetch', 'docs.cloud.google.com'), ['wait', 'A안/B안 중 골라주세요']], 700000, 'miner'),
+    mk('session_demo_c3', 'cloud', 'release', '릴리스 노트', [T('Bash', 'git log --oneline'), T('Read', 'CHANGELOG.md'), T('Edit', 'CHANGELOG.md'), T('Bash', 'git commit -m release'), T('Bash', 'git push --tags'), T('WebSearch', 'semver'), ['done', 'v1.4.0 태그 푸시']], 300000, 'harbor'),
   ];
 }
 function demoTick() {
   for (const v of demo.villages) {
-    const step = v.script[v.i % v.script.length];
     if (v.hold && now() < v.hold) continue;
+    const step = v.script[v.i % v.script.length];
     v.i++;
     const ts = now(); v.lastAt = ts;
     const subs = [...v.students.values()];
     switch (step[0]) {
-      case 'tool': onToolUse(v, { id: 'd' + effectSeq + Math.random(), name: step[1], input: step[2] }, ts); v.status = 'working'; v.ctxUsed += 6000; break;
+      case 'tool': v.lastId = 'd' + Math.random(); onToolUse(v, { id: v.lastId, name: step[1], input: step[2] }, ts); v.status = 'working'; v.ctxUsed += 5000; break;
+      case 'result': onToolResult(v, { tool_use_id: v.lastId, is_error: step[1] }, ts); break;
       case 'agent': onToolUse(v, { id: 'a' + Math.random(), name: 'Agent', input: { subagent_type: step[1], description: step[2] } }, ts); v.status = 'working'; break;
-      case 'sub': if (subs[step[1]]) { subs[step[1]].tool = step[2]; subs[step[1]].at = ts; } break;
+      case 'sub': if (subs[step[1]]) { subs[step[1]].tool = step[2]; subs[step[1]].kind = kindOf(step[2], {}); subs[step[1]].at = ts; } break;
       case 'subdone': if (subs[step[1]]) { subs[step[1]].done = true; subs[step[1]].doneAt = ts; subs[step[1]].hasMeta = true; } break;
-      case 'boom': effect(v, 'boom', '', ts); v.errorAt = ts; break;
       case 'wait': v.status = 'waiting'; v.note = step[1]; v.hold = ts + 9000; break;
       case 'done': v.status = 'done'; v.note = step[1]; v.hold = ts + 9000; break;
       case 'idle': v.status = 'idle'; v.hold = ts + 12000;
-        if (v.i >= v.script.length && v.script.length > 1) { const n = newVillage(v.id, v.where); Object.assign(v, { files: n.files, students: n.students, edits: 0, commits: 0, pushes: 0, prs: 0, i: 0, ctxUsed: 30000 }); effect(v, 'dawn', '', ts); }
+        if (v.i >= v.script.length && v.script.length > 1) { const n = newVillage(v.id, v.where); Object.assign(v, { files: n.files, students: n.students, edits: 0, commits: 0, pushes: 0, prs: 0, i: 0, ctxUsed: 30000, log: [], tests: { pass: 0, fail: 0 }, todos: 0 }); effect(v, 'dawn', '', ts); }
         break;
     }
   }
@@ -506,7 +560,8 @@ function cookie(req, k) {
 }
 const same = (a, b) => a && b && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
-const INDEX = path.join(__dirname, 'index.html');
+const PUBLIC = path.join(__dirname, 'public');
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   const host = String(req.headers.host || '').replace(/:\d+$/, '');
@@ -532,9 +587,11 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(fromHere && LAN ? { urls: lanUrls() } : { urls: [] }));
   }
-  if (u.pathname === '/' || u.pathname === '/index.html') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    return fs.createReadStream(INDEX).pipe(res);
+  const rel = u.pathname === '/' ? 'index.html' : decodeURIComponent(u.pathname).replace(/^\/+/, '');
+  const file = path.join(PUBLIC, rel);
+  if (file.startsWith(PUBLIC + path.sep) && MIME[path.extname(file)] && fs.existsSync(file)) {
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)], 'Cache-Control': 'no-store' });
+    return fs.createReadStream(file).pipe(res);
   }
   res.writeHead(404); res.end();
 });

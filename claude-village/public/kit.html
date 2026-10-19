@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Village Kit</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="style.css">
+<style>
+  .kit { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); }
+  .kit.wide { grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); }
+  .cell { background: var(--card); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden; }
+  .cell canvas { display: block; width: 100%; aspect-ratio: 200 / 170; background: linear-gradient(180deg, #d9eef8, #f1f8fb); }
+  .wide .cell canvas { aspect-ratio: 340 / 276; }
+  .cell .meta { padding: 10px 12px 12px; }
+  .cell b { font-size: 14px; } .cell small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .cell .chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+  .cell .chips span { font-size: 11px; padding: 2px 7px; border-radius: 6px; background: var(--chip); color: var(--muted); }
+  .swatch { display: flex; height: 26px; border-radius: 8px; overflow: hidden; margin-top: 8px; }
+  .swatch i { flex: 1; }
+  .intro { color: var(--muted); max-width: 760px; margin: 6px 2px 0; font-size: 13.5px; }
+  .count { color: var(--muted); font-weight: 500; font-size: 13px; }
+</style>
+</head>
+<body>
+<header><div class="bar"><div class="brand"><div><h1>Village Kit</h1><p>마을을 만드는 조각들 · <span id="total"></span></p></div></div><a class="icon-btn" href="./">← 마을로</a></div></header>
+<main>
+  <p class="intro">마을 하나 = 세션 하나. 세션이 많이 하는 일로 <b>마을 스타일</b>이 정해지고, 레포마다 <b>바이옴(지형 색)</b>이 고정돼요. 스타일이 지도 템플릿, 특색 건물, 전망대, 소품, 지붕 색을 고르고, 그 위에 아래 조각들을 조합해요. 일이 벌어지는 핵심 건물은 지붕이 열려 단면이 보여요.</p>
+  <div class="section"><h2>마을 스타일</h2><span class="count">6</span></div><div class="kit wide" id="styles"></div>
+  <div class="section"><h2>핵심 건물 — 겉모습 / 단면</h2><span class="count" id="nCore"></span></div><div class="kit" id="core"></div>
+  <div class="section"><h2>야외 구역 — 평소 / 일할 때</h2><span class="count" id="nZone"></span></div><div class="kit" id="zones"></div>
+  <div class="section"><h2>특색 건물</h2><span class="count" id="nExtra"></span></div><div class="kit" id="extras"></div>
+  <div class="section"><h2>전망대</h2><span class="count" id="nLook"></span></div><div class="kit" id="looks"></div>
+  <div class="section"><h2>집 — 파일 종류마다 모양, 고칠수록 커져요</h2><span class="count" id="nHouse"></span></div><div class="kit" id="houses"></div>
+  <div class="section"><h2>소품 · 나무</h2><span class="count" id="nProp"></span></div><div class="kit" id="props"></div>
+  <div class="section"><h2>바이옴</h2><span class="count">6</span></div><div class="kit" id="biomes"></div>
+  <div class="section"><h2>사람 — 자세</h2></div><div class="kit" id="people"></div>
+</main>
+<script src="iso.js"></script>
+<script src="kit.js"></script>
+<script src="people.js"></script>
+<script src="village.js"></script>
+<script>
+'use strict';
+const CW = 200, CH = 170;
+const cells = [];
+function cell(parent, title, sub, chips, draw, wide) {
+  const el = document.createElement('div'); el.className = 'cell';
+  el.innerHTML = `<canvas></canvas><div class="meta"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}${chips && chips.length ? `<div class="chips">${chips.map((c) => `<span>${c}</span>`).join('')}</div>` : ''}</div>`;
+  document.getElementById(parent).appendChild(el);
+  cells.push({ cv: el.querySelector('canvas'), draw, wide, el, zoom: typeof wide === 'number' ? wide : null });
+  if (typeof wide === 'number') cells[cells.length - 1].wide = false;
+  return el;
+}
+const style = STYLES.artisan, biome = BIOMES.meadow;
+const ctxFor = (g, t, pf, o = {}) => { const [w, d] = o.size || pf.size; return { g, t, x: 0, y: 0, w, d, style: o.style || style, biome: o.biome || biome, seed: o.seed ?? 7, night: 0, lights: [], door: 'L', state: { todos: 4, crates: 4, ...(o.state || {}) }, ...o }; };
+let CUR = { w: CW, h: CH };
+function centerFor(w, d, lift = 0) { setOrigin(CUR.w / 2 + (d - w) * TW / 4, CUR.h * .56 - (w + d) * TH / 4 + lift * .8); }
+function groundPatch(g, w, d, b = biome) { for (let y = -1; y <= d; y++) for (let x = -1; x <= w; x++) tile(g, x, y, 1, 1, 0, b.grass[(x + y + 2) % 2]); }
+const samplePeople = (role) => (x, y, w, d, spots) => spots.slice(0, 3).forEach((sp, i) => { const [px, py] = iso(x + w * sp[0], y + d * sp[1]); person(this.g || window.__g, px, py, { s: .95, t: performance.now() + i * 300, pose: sp[2], shirt: SHIRTS[i + 2], hair: HAIRS[i], hat: i === 0 ? 'top' : 'cap', pack: i > 0, dir: 1 }); });
+
+// 핵심 건물: 겉 / 단면
+const core = Object.values(PREFABS).filter((p) => p.group === 'core');
+for (const pf of core) {
+  cell('core', pf.name, pf.desc, ['겉모습'], (g, t) => { const [w, d] = pf.size; centerFor(w, d, 18); groundPatch(g, w, d); pf.draw(ctxFor(g, t, pf, { on: false, open: 0 })); });
+  cell('core', pf.name + ' 단면', '일할 때 지붕이 열려요', ['단면', '일하는 중'], (g, t) => { const [w, d] = pf.size; centerFor(w, d, 18); groundPatch(g, w, d); window.__g = g; pf.draw(ctxFor(g, t, pf, { on: true, open: 1, inside: samplePeople() })); });
+}
+document.getElementById('nCore').textContent = core.length + '종';
+
+// 구역
+const zones = Object.values(PREFABS).filter((p) => p.group === 'zone');
+for (const pf of zones) {
+  const busy = { plaza: { ring: true, todos: 5 }, lot: { building: true, buildName: 'pkce.ts' }, testground: { fail: true }, dock: { crates: 6, sail: 0 }, field: {} }[pf.id] || {};
+  cell('zones', pf.name, pf.desc, ['평소'], (g, t) => { centerFor(2, 2, 10); groundPatch(g, 2, 2); pf.draw(ctxFor(g, t, pf, { on: false, state: { todos: 2, crates: 2 }, dockDir: 'x' })); });
+  cell('zones', pf.name + ' · 일할 때', '', ['활동 중'], (g, t) => { centerFor(2, 2, 10); groundPatch(g, 2, 2); window.__g = g; const c = ctxFor(g, t, pf, { on: true, state: { ...busy, sail: pf.id === 'dock' ? (t / 6000) % 1 : 0, pass: pf.id === 'testground' && ((t / 4000) | 0) % 2 === 0, fail: pf.id === 'testground' && ((t / 4000) | 0) % 2 === 1 }, dockDir: 'x' }); pf.draw(c); const pose = { field: 'search', lot: 'carry', testground: 'look', dock: 'carry', plaza: 'wave' }[pf.id]; const [px, py] = iso(1, 1.4); person(g, px, py, { s: 1.1, t, pose, shirt: SHIRTS[1], hair: HAIRS[2], hat: 'top', hatColor: '#c0503e', dir: -1 }); });
+}
+document.getElementById('nZone').textContent = zones.length + '종';
+
+// 특색 건물
+const extras = Object.values(PREFABS).filter((p) => p.group === 'extra');
+for (const pf of extras) {
+  const st = STYLES[pf.tags[0]];
+  cell('extras', pf.name, pf.desc, pf.tags.map((k) => STYLES[k].name), (g, t) => { const [w, d] = pf.size; centerFor(w, d, 22); groundPatch(g, w, d); pf.draw(ctxFor(g, t, pf, { style: st, on: ((t / 3000) | 0) % 2 === 0 })); });
+}
+document.getElementById('nExtra').textContent = extras.length + '종';
+// 전망대
+const looks = Object.values(PREFABS).filter((p) => p.group === 'lookout');
+for (const pf of looks) cell('looks', pf.name, pf.desc, pf.tags.map((k) => STYLES[k].name), (g, t) => { centerFor(1, 1, 30); groundPatch(g, 1, 1); pf.draw(ctxFor(g, t, pf, { on: true, style: STYLES[pf.tags[0]] })); }, 2);
+document.getElementById('nLook').textContent = looks.length + '종';
+// 집
+const houses = Object.values(PREFABS).filter((p) => p.group === 'house');
+for (const pf of houses) {
+  const exts = Object.entries(HOUSE_OF_EXT).filter(([, v]) => v === pf.id).map(([k]) => '.' + k);
+  cell('houses', pf.name, '1번 → 많이 고친 집', exts.slice(0, 6), (g, t) => {
+    setOrigin(CUR.w / 2, CUR.h * .3);
+    for (let i = 0; i < 3; i++) { const x = i * 1.25 - .5, y = .9 - i * 1.25 + 1.2; tile(g, x, y, 1, 1, 0, biome.grass[0]); pf.draw({ g, t, x, y, w: 1, d: 1, night: 0, lights: [], grow: 1, level: i * 2, roofColor: ROOF_OF_EXT[(exts[0] || '.ts').slice(1)] || '#d0603f', wall: '#f6efe3', on: i === 2, biome, style }); }
+  }, 1.5);
+}
+document.getElementById('nHouse').textContent = houses.length + '종';
+// 소품
+const props = Object.values(PREFABS).filter((p) => p.group === 'prop');
+for (const pf of props) cell('props', pf.name, '', [], (g, t) => { centerFor(1, 1, 22); groundPatch(g, 1, 1); pf.draw({ g, t, x: 0, y: 0, w: 1, d: 1, biome, night: 0, lights: [], s: 1.1 }); }, 2.6);
+document.getElementById('nProp').textContent = props.length + '종';
+// 바이옴
+for (const [k, b] of Object.entries(BIOMES)) {
+  const el = cell('biomes', b.name, '', [], (g, t) => { centerFor(3, 3, 4); for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) tile(g, x, y, 1, 1, 0, y === 1 ? b.path : b.grass[(x + y) % 2]); box(g, 0, 0, 3, 3, 0, 0, b.dirt[0], { noTop: true }); poly(g, [iso(0, 3), iso(3, 3), iso(3, 3, -10), iso(0, 3, -10)], b.dirt[0]); poly(g, [iso(3, 0), iso(3, 3), iso(3, 3, -10), iso(3, 0, -10)], b.dirt[1]); b.trees.forEach((tr, i) => treeAt({ g, t }, tr, .5 + i, .5 + (i % 2) * 2, 1)); });
+  el.querySelector('.meta').insertAdjacentHTML('beforeend', `<div class="swatch">${[...b.grass, b.path, ...b.dirt, b.water, ...b.flowers].map((c) => `<i style="background:${c}"></i>`).join('')}</div>`);
+}
+// 사람
+for (const pose of ['walk', 'stand', 'read', 'type', 'hammer', 'carry', 'search', 'look', 'wave', 'cheer', 'sit', 'fish', 'sleep']) {
+  cell('people', pose, { walk: '걷기', stand: '서 있기', read: '읽기 (도서관)', type: '타자 (공장)', hammer: '망치질 (공방)', carry: '나르기 (공터/부두)', search: '돋보기 (들판)', look: '망원경 (전망대)', wave: '손 흔들기 (응답 대기)', cheer: '만세 (완료)', sit: '앉기', fish: '낚시', sleep: '잠 (여관)' }[pose], [], (g, t) => {
+    setOrigin(CUR.w / 2, CUR.h * .42); tile(g, -.5, -.5, 2, 2, 0, biome.grass[0]);
+    const [x1, y1] = iso(.2, .9), [x2, y2] = iso(.9, .2);
+    person(g, x1 - 6, y1 + 8, { s: 1.3, t, pose, shirt: SHIRTS[1], hair: HAIRS[0], hat: 'top', hatColor: '#c0503e', dir: 1 });
+    person(g, x2 + 10, y2 + 10, { s: 1, t: t + 300, pose, shirt: SHIRTS[4], hair: HAIRS[2], hat: 'cap', pack: true, dir: -1 });
+  });
+}
+// 마을 스타일: 샘플 마을
+const demoHouses = (n) => Array.from({ length: n }, (_, i) => ({ name: 'f' + i + '.' + ['ts', 'py', 'md', 'json', 'sql', 'tsx'][i % 6], path: 'p' + i, edits: 1 + (i * 3) % 7 }));
+Object.entries(STYLES).forEach(([k, s], i) => {
+  const v = { id: 'sample-' + k, where: i % 3 === 2 ? 'cloud' : 'local', archetype: k, seed: [11, 205, 3071, 77, 9001, 4242][i], status: 'working', kind: ['read', 'edit', 'run', 'git', 'mcp', 'search'][i], houses: demoHouses(6 + i * 2), students: [{ id: 's1' + k, kind: 'read', done: false }, { id: 's2' + k, kind: 'search', done: false }], effects: [], stats: { commits: 3, prs: 1, edits: 9, files: 6 }, todos: 3, ctx: { pct: [.2, .4, .6, .7, .85, .95][i] }, log: [], mix: {} };
+  const scene = new VillageScene(v);
+  const L = scene.L;
+  cell('styles', s.name, s.desc, [L.biome.name + ' (예시)', '지도: ' + L.tname + (L.mirror ? ' 뒤집음' : ''), '특색: ' + s.extras.map((e) => PREFABS[e].name).join('·'), '전망대: ' + PREFABS[s.lookout].name], (g, t, dt) => scene.draw(g, t, dt), true);
+});
+
+document.getElementById('total').textContent = Object.keys(PREFABS).length + '개 조각 · 바이옴 ' + BIOME_KEYS.length + ' · 스타일 ' + Object.keys(STYLES).length + ' · 지도 템플릿 ' + Object.keys(TEMPLATES).length + '×2';
+
+let last = 0;
+function loop(t) {
+  const dt = last ? (t - last) / 1000 : 0;
+  if (t - last > 33) {
+    last = t;
+    for (const c of cells) {
+      const r = c.cv.getBoundingClientRect(); if (r.bottom < 0 || r.top > innerHeight) continue;
+      const W = c.wide ? VW : CW, H = c.wide ? VH : CH, dpr = Math.min(2, devicePixelRatio || 1), pw = Math.round((c.cv.clientWidth || W) * dpr);
+      if (c.cv.width !== pw) { c.cv.width = pw; c.cv.height = Math.round(pw * H / W); }
+      const z = c.wide ? 1 : (c.zoom || 1.7);
+      CUR = { w: W / z, h: H / z };
+      const g = c.cv.getContext('2d'); g.setTransform(pw / W * z, 0, 0, pw / W * z, 0, 0); g.clearRect(0, 0, W, H);
+      try { c.draw(g, t, dt); } catch (e) { console.error(e); }
+    }
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
