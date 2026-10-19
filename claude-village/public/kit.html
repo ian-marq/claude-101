@@ -25,9 +25,9 @@
 <body>
 <header><div class="bar"><div class="brand"><div><h1>Village Kit</h1><p>마을을 만드는 조각들 · <span id="total"></span></p></div></div><a class="icon-btn" href="./">← 마을로</a></div></header>
 <main>
-  <p class="intro">마을 하나 = 세션 하나. 세션이 많이 하는 일로 <b>마을 스타일</b>이 정해지고, 레포마다 <b>바이옴(지형 색)</b>이 고정돼요. 스타일이 지도 템플릿, 특색 건물, 전망대, 소품, 지붕 색을 고르고, 그 위에 아래 조각들을 조합해요. 일이 벌어지는 핵심 건물은 지붕이 열려 단면이 보여요.</p>
+  <p class="intro">마을 하나 = 세션 하나. 세션이 많이 하는 일로 <b>마을 스타일</b>이 정해지고, 레포마다 <b>바이옴(지형 색)</b>이 고정돼요. 스타일이 지도 템플릿, 특색 건물, 전망대, 소품, 지붕 색을 고르고, 그 위에 아래 조각들을 조합해요. 일하는 건물(도서관·공방·공장·회관·우체국·여관)은 케이크처럼 앞쪽 한 조각이 잘려 있어서 안이 늘 보여요.</p>
   <div class="section"><h2>마을 스타일</h2><span class="count">6</span></div><div class="kit wide" id="styles"></div>
-  <div class="section"><h2>핵심 건물 — 겉모습 / 단면</h2><span class="count" id="nCore"></span></div><div class="kit" id="core"></div>
+  <div class="section"><h2>핵심 건물 — 케이크처럼 잘린 단면</h2><span class="count" id="nCore"></span></div><div class="kit" id="core"></div>
   <div class="section"><h2>야외 구역 — 평소 / 일할 때</h2><span class="count" id="nZone"></span></div><div class="kit" id="zones"></div>
   <div class="section"><h2>특색 건물</h2><span class="count" id="nExtra"></span></div><div class="kit" id="extras"></div>
   <div class="section"><h2>전망대</h2><span class="count" id="nLook"></span></div><div class="kit" id="looks"></div>
@@ -62,8 +62,8 @@ const samplePeople = (role) => (x, y, w, d, spots) => spots.slice(0, 3).forEach(
 // 핵심 건물: 겉 / 단면
 const core = Object.values(PREFABS).filter((p) => p.group === 'core');
 for (const pf of core) {
-  cell('core', pf.name, pf.desc, ['겉모습'], (g, t) => { const [w, d] = pf.size; centerFor(w, d, 18); groundPatch(g, w, d); pf.draw(ctxFor(g, t, pf, { on: false, open: 0 })); });
-  cell('core', pf.name + ' 단면', '일할 때 지붕이 열려요', ['단면', '일하는 중'], (g, t) => { const [w, d] = pf.size; centerFor(w, d, 18); groundPatch(g, w, d); window.__g = g; pf.draw(ctxFor(g, t, pf, { on: true, open: 1, inside: samplePeople() })); });
+  cell('core', pf.name, pf.desc, ['비었을 때'], (g, t) => { const [w, d] = pf.size; centerFor(w, d, 18); groundPatch(g, w, d); pf.draw(ctxFor(g, t, pf, { on: false, open: 0 })); });
+  cell('core', pf.name + ' · 일할 때', '불이 켜지고 안에서 일해요', ['일하는 중'], (g, t) => { const [w, d] = pf.size; centerFor(w, d, 18); groundPatch(g, w, d); window.__g = g; pf.draw(ctxFor(g, t, pf, { on: true, open: 1, inside: samplePeople() })); });
 }
 document.getElementById('nCore').textContent = core.length + '종';
 

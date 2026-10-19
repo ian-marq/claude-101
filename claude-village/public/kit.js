@@ -113,151 +113,235 @@ function shelf(c, x, y, w, d, h, along) { // 뒷벽 책장
 const PREFABS = {};
 const def = (id, o) => (PREFABS[id] = { id, ...o });
 
-// ━━ 핵심 건물 (안이 보이는 단면) ━━
+// ━━ 핵심 건물: 케이크처럼 앞쪽 한 조각을 잘라낸 단면 ━━
+// 잘린 면에는 층이 보인다: 바닥판 · 방 · 천장 · 다락 · 지붕. 안에서 일하는 모습이 늘 보인다.
+const CUT = '#fbf2e2', CUT_EDGE = '#d9c3a0', CEIL = '#ead6b4', ATTIC = '#f4e6cc';
+function roofZ(kind, x, y, w, d, H, rh, px, py) {
+  const ax = 1 - Math.abs(px - (x + w / 2)) / (w / 2), ay = 1 - Math.abs(py - (y + d / 2)) / (d / 2);
+  if (kind === 'gableX') return H + rh * ay;
+  if (kind === 'gableY') return H + rh * ax;
+  if (kind === 'hip') return H + rh * Math.min(ax, ay);
+  return H + 3; // flat
+}
+// 지붕을 작은 면으로 나눠 높이대로 칠함 (L자 모양에도 맞음)
+function roofCells(g, x0, y0, x1, y1, zr, rc) {
+  const nx = Math.max(2, Math.round((x1 - x0) * 6)), ny = Math.max(2, Math.round((y1 - y0) * 6));
+  const dx = (x1 - x0) / nx, dy = (y1 - y0) / ny, cells = [];
+  for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) cells.push([i, j]);
+  cells.sort((a, b) => a[0] + a[1] - b[0] - b[1]);
+  for (const [i, j] of cells) {
+    const ax = x0 + i * dx, ay = y0 + j * dy, bx = ax + dx, by = ay + dy;
+    const z00 = zr(ax, ay), z10 = zr(bx, ay), z11 = zr(bx, by), z01 = zr(ax, by);
+    const gx = ((z10 - z00) + (z11 - z01)) / 2 / dx, gy = ((z01 - z00) + (z11 - z10)) / 2 / dy;
+    const col = gy < -2 && gy <= gx ? rc : gx < -2 ? shade(rc, -.24) : (gx > 2 || gy > 2) ? shade(rc, .12) : shade(rc, .06);
+    poly(g, [iso(ax, ay, z00), iso(bx, ay, z10), iso(bx, by, z11), iso(ax, by, z01)], col, col, .5);
+  }
+}
+// 세로 면 하나(바닥 z0 ~ 위쪽 윤곽선)를 채움. along: 'x' 면 y 고정, 'y' 면 x 고정
+function profileFace(g, along, fixed, a0, a1, z0, ztop, fill, edge) {
+  const n = 10, top = [];
+  for (let i = 0; i <= n; i++) { const a = lerp(a0, a1, i / n); top.push(along === 'x' ? iso(a, fixed, ztop(a)) : iso(fixed, a, ztop(a))); }
+  const pts = along === 'x' ? [iso(a0, fixed, z0), iso(a1, fixed, z0)] : [iso(fixed, a0, z0), iso(fixed, a1, z0)];
+  poly(g, [pts[0], pts[1], ...top.reverse()], fill, edge, .8);
+  return top.reverse();
+}
+function drawCake(c, s) {
+  const g = c.g, ins = s.inset ?? .1;
+  const x = c.x + ins, y = c.y + ins, w = c.w - ins * 2, d = c.d - ins * 2, H = s.h;
+  const wall = s.wall || pick(c.style.walls, c.seed), rc = s.roof || pick(c.style.roofs, c.seed >>> 3);
+  const inner = s.inner || '#efe2cc', kind = s.roofKind || 'gableX', rh = s.roofH ?? 12, t = .09;
+  const cx = w >= 1.2 ? x + w * .4 : x, cy = d >= 1.2 ? y + d * .4 : y; // 잘라낼 조각: [cx..x+w] × [cy..y+d]
+  const zr = (px, py) => roofZ(kind, x, y, w, d, H, rh, px, py);
+  const busy = !!(c.on || c.inside);
+  // 1. 바닥판(케이크 받침)
+  box(g, x - .05, y - .05, w + .1, d + .1, 2.5, 0, shade(wall, -.2), { top: s.floor || '#c99c6c' });
+  g.save(); g.translate(0, -2.5);
+  // 2. 안쪽 뒷벽 + 바닥 무늬
+  poly(g, [iso(x, y, 0), iso(x + w, y, 0), iso(x + w, y, H), iso(x, y, H)], inner);
+  poly(g, [iso(x, y, 0), iso(x, y + d, 0), iso(x, y + d, H), iso(x, y, H)], shade(inner, -.12));
+  poly(g, [iso(x, y, 0), iso(x + w, y, 0), iso(x + w, y, 2), iso(x, y, 2)], shade(inner, -.25));
+  poly(g, [iso(x, y, 0), iso(x, y + d, 0), iso(x, y + d, 2), iso(x, y, 2)], shade(inner, -.3));
+  for (let i = 1; i < 6; i++) line(g, iso(x, y + d * i / 6), iso(x + w, y + d * i / 6), 'rgba(90,60,30,.12)', .5);
+  // 3. 안쪽 살림 + 사람
+  if (s.interior) s.interior(c, x, y, w, d, H);
+  if (c.inside) c.inside(x, y, w, d, s.spots || [[.7, .7]]);
+  if (!busy) poly(g, [iso(x, y + d), iso(x + w, y + d), iso(x + w, y), iso(x + w, y, H), iso(x, y, H), iso(x, y + d, H)], c.night > .45 ? 'rgba(10,15,40,.35)' : 'rgba(30,30,50,.16)');
+  else if (c.lights) c.lights.push({ x: iso(x + w * .55, y + d * .55, 10)[0], y: iso(x + w * .55, y + d * .55, 10)[1], r: 34, color: 'rgba(255,214,140,.35)' });
+  // 4. 남은 바깥벽 (잘린 끝은 크림색 단면)
+  const door = cx - x >= .5 ? 'L' : 'R';
+  if (cx > x + .01) {
+    box(g, x, y + d - t, cx - x, t, H, 0, wall, { right: CUT, top: CUT });
+    const span = cx - x, n = Math.max(1, Math.round(span * 1.6));
+    for (const [v0, v1] of s.rows || [[H * .42, H * .42 + 6]]) for (let i = 0; i < n; i++) { const u = span * (i + .5) / n; if (door === 'L' && v0 < 10 && Math.abs(u - span / 2) < .25) continue; win(c, faceL(x, y + d - t, t, 0, u - .13, u + .13, v0, v1), busy); }
+    if (door === 'L') doorOn(c, 'L', x, y + d - t, span, t, s.doorColor);
+  }
+  if (cy > y + .01) {
+    box(g, x + w - t, y, t, cy - y, H, 0, wall, { left: CUT, top: CUT, right: shade(wall, -.16) });
+    const span = cy - y, n = Math.max(1, Math.round(span * 1.6));
+    for (const [v0, v1] of s.rows || [[H * .42, H * .42 + 6]]) for (let i = 0; i < n; i++) { const u = span * (i + .5) / n; if (door === 'R' && v0 < 10 && Math.abs(u - span / 2) < .2) continue; win(c, faceR(x + w - t, y, t, 0, u - .12, u + .12, v0, v1), busy); }
+    if (door === 'R') doorOn(c, 'R', x + w - t, y, t, span, s.doorColor);
+  }
+  if (s.decor) s.decor(c, x, y, w, d, H, wall, rc, cx, cy);
+  // 5. 천장 · 다락 · 지붕 — 뒤쪽 덩어리 먼저, 그다음 왼쪽 덩어리
+  const sectionX = (a0, a1) => { // y=cy 평면을 자른 면
+    profileFace(g, 'x', cy, a0, a1, H, (a) => zr(a, cy), ATTIC, CUT_EDGE);
+    poly(g, [iso(a0, cy, H), iso(a1, cy, H), iso(a1, cy, H + 2.5), iso(a0, cy, H + 2.5)], CEIL);
+    const top = []; for (let i = 0; i <= 10; i++) { const a = lerp(a0, a1, i / 10); top.push(iso(a, cy, zr(a, cy))); }
+    g.lineJoin = 'round'; g.strokeStyle = shade(rc, -.1); g.lineWidth = 3; g.beginPath(); top.forEach((p, i) => (i ? g.lineTo(p[0], p[1] + 1.2) : g.moveTo(p[0], p[1] + 1.2))); g.stroke();
+  };
+  const sectionY = (a0, a1) => { // x=cx 평면을 자른 면
+    profileFace(g, 'y', cx, a0, a1, H, (a) => zr(cx, a), shade(ATTIC, -.05), CUT_EDGE);
+    poly(g, [iso(cx, a0, H), iso(cx, a1, H), iso(cx, a1, H + 2.5), iso(cx, a0, H + 2.5)], shade(CEIL, -.06));
+    const top = []; for (let i = 0; i <= 10; i++) { const a = lerp(a0, a1, i / 10); top.push(iso(cx, a, zr(cx, a))); }
+    g.lineJoin = 'round'; g.strokeStyle = shade(rc, -.2); g.lineWidth = 3; g.beginPath(); top.forEach((p, i) => (i ? g.lineTo(p[0], p[1] + 1.2) : g.moveTo(p[0], p[1] + 1.2))); g.stroke();
+  };
+  if (cy > y + .01) { // 뒤쪽 덩어리 [x..x+w] × [y..cy]
+    profileFace(g, 'y', x + w, y, cy, H, (a) => zr(x + w, a), shade(wall, -.16));
+    roofCells(g, x, y, x + w, cy, zr, rc);
+    sectionX(cx, x + w);
+  }
+  if (cx > x + .01) { // 왼쪽 덩어리 [x..cx] × [cy..y+d]
+    profileFace(g, 'x', y + d, x, cx, H, (a) => zr(a, y + d), wall);
+    roofCells(g, x, cy, cx, y + d, zr, rc);
+    sectionY(cy, y + d);
+  }
+  if (s.top) s.top(c, x, y, w, d, H, wall, rc, zr);
+  g.restore();
+  // 6. 바닥판 앞쪽 단면 띠
+  poly(g, [iso(cx, y + d + .05, 0), iso(x + w + .05, y + d + .05, 0), iso(x + w + .05, y + d + .05, 2.5), iso(cx, y + d + .05, 2.5)], shade(CUT, -.06), CUT_EDGE, .6);
+  poly(g, [iso(x + w + .05, cy, 0), iso(x + w + .05, y + d + .05, 0), iso(x + w + .05, y + d + .05, 2.5), iso(x + w + .05, cy, 2.5)], shade(CUT, -.14), CUT_EDGE, .6);
+  if (s.always) s.always(c, x, y, w, d, H, wall, rc);
+}
+
 def('library', { name: '도서관', group: 'core', role: 'library', size: [2, 2], desc: 'Read — 파일을 읽어요',
   draw(c) {
     const grand = c.grand;
-    drawBuilding(c, { h: grand ? 30 : 24, roofKind: grand ? 'dome' : 'hip', roofH: 15, winL: 3, winR: 3, rows: [[9, 18]],
-      roof: grand ? '#7d93b8' : undefined, floor: '#b98a5c', inner: '#efe2cc',
-      decor: grand ? (c, x, y, w, d, h, wall) => { for (let i = 0; i < 4; i++) poly(c.g, faceL(x, y, d, 0, .12 + i * .52, .2 + i * .52, 2, h), shade(wall, .25)); } : null,
+    drawCake(c, { h: grand ? 28 : 24, roofKind: 'hip', roofH: grand ? 18 : 14, roof: grand ? '#6f86b0' : undefined, rows: [[9, 17]], floor: '#b98a5c', inner: '#efe2cc',
+      decor: grand ? (c, x, y, w, d, h, wall, rc, cx) => { for (let i = 0; i < 3; i++) { const u = .1 + i * .3; if (u + .1 < cx - x) poly(c.g, faceL(x, y, d, 0, u, u + .08, 2, h), shade(wall, .25)); } } : null,
       interior(c, x, y, w, d, h) {
-        shelf(c, x, y, w, d, h * .75, 'x'); shelf(c, x, y, w, d, h * .75, 'y');
-        fbox(c, x, y, w * .38, d * .45, w * .42, d * .3, 6, 0, '#9a6b45'); // 책상
-        const [lx, ly] = iso(x + w * .55, y + d * .58, 9); circle(c.g, lx, ly - 3, 2.2, c.on ? '#ffe08a' : '#e8d9b8');
-        if (c.on && c.lights) c.lights.push({ x: lx, y: ly - 3, r: 18, color: 'rgba(255,220,130,.55)' });
-        poly(c.g, [iso(x + w * .45, y + d * .55, 6.2), iso(x + w * .6, y + d * .55, 6.2), iso(x + w * .6, y + d * .65, 6.2), iso(x + w * .45, y + d * .65, 6.2)], '#fff');
-        if (c.on) for (let i = 0; i < 3; i++) { const p = (c.t / 1800 + i / 3) % 1, [bx, by] = iso(x + w * (.3 + i * .2), y + d * .3, 14 + p * 16); c.g.globalAlpha *= 1 - p; c.g.fillStyle = SPINES[i * 3]; c.g.fillRect(bx - 2.5, by - 1.5, 5, 3); c.g.globalAlpha /= Math.max(.01, 1 - p); }
+        shelf(c, x, y, w, d, h * .78, 'x'); shelf(c, x, y, w, d, h * .78, 'y');
+        fbox(c, x, y, w * .5, d * .5, w * .38, d * .28, 6, 0, '#9a6b45'); // 책상
+        poly(c.g, [iso(x + w * .55, y + d * .55, 6.2), iso(x + w * .7, y + d * .55, 6.2), iso(x + w * .7, y + d * .68, 6.2), iso(x + w * .55, y + d * .68, 6.2)], '#fff');
+        const [lx, ly] = iso(x + w * .8, y + d * .58, 9); line(c.g, [lx, ly + 3], [lx, ly - 3], '#5d5a55', .8); circle(c.g, lx, ly - 4, 2.2, c.on ? '#ffe08a' : '#e8d9b8');
+        if (c.on && c.lights) c.lights.push({ x: lx, y: ly - 4, r: 18, color: 'rgba(255,220,130,.6)' });
+        if (c.on) for (let i = 0; i < 3; i++) { const p = (c.t / 1800 + i / 3) % 1, [bx, by] = iso(x + w * (.55 + i * .12), y + d * .45, 12 + p * 16); c.g.save(); c.g.globalAlpha *= 1 - p; c.g.fillStyle = SPINES[i * 3]; c.g.fillRect(bx - 2.5, by - 1.5, 5, 3); c.g.restore(); }
       },
-      spots: [[.4, .78, 'read'], [.78, .5, 'read'], [.25, .55, 'read'], [.62, .82, 'read']] });
+      spots: [[.62, .82, 'read'], [.88, .55, 'read'], [.5, .48, 'stand'], [.82, .85, 'read']] });
   } });
 
 def('workshop', { name: '공방', group: 'core', role: 'workshop', size: [2, 2], desc: 'Edit — 파일을 고쳐요',
   draw(c) {
-    const grand = c.grand;
-    drawBuilding(c, { h: grand ? 26 : 22, roofKind: 'gableX', roofH: grand ? 14 : 12, winL: 2, winR: 2, rows: [[8, 15]], floor: '#c79a6a', inner: '#f0dfc6',
-      top: (c, x, y, w, d, h) => { box(c.g, x + w * .7, y + d * .2, .22, .22, 14, h + 2, '#8e6a52'); },
-      decor: (c, x, y, w, d, h) => { const [sx, sy] = iso(x + w, y + d * .3, h * .62); c.g.fillStyle = '#6a4428'; c.g.fillRect(sx - 1, sy - 4, 9, 6); c.g.fillStyle = '#f2d24b'; circle(c.g, sx + 3.5, sy - 1, 1.6, '#f2d24b'); },
-      interior(c, x, y, w, d, h) {
+    drawCake(c, { h: c.grand ? 24 : 21, roofKind: 'gableX', roofH: c.grand ? 15 : 12, rows: [[8, 14]], floor: '#c79a6a', inner: '#f0dfc6',
+      top: (c, x, y, w, d, h, wall, rc, zr) => box(c.g, x + w * .75, y + d * .15, .2, .2, 14, zr(x + w * .85, y + d * .25) - 3, '#8e6a52'),
+      decor: (c, x, y, w, d) => { const [sx, sy] = iso(x + w, y + d * .22, 15); c.g.fillStyle = '#6a4428'; c.g.fillRect(sx - 1, sy - 4, 9, 6); circle(c.g, sx + 3.5, sy - 1, 1.6, '#f2d24b'); },
+      interior(c, x, y, w, d) {
         const g = c.g;
-        poly(g, [iso(x + .15, y + .02, 6), iso(x + w - .2, y + .02, 6), iso(x + w - .2, y + .02, 18), iso(x + .15, y + .02, 18)], '#a07a52'); // 공구판
-        for (let i = 0; i < 6; i++) { const [tx, ty] = iso(x + .3 + i * (w - .6) / 6, y + .03, 15); g.fillStyle = '#5d5a55'; g.fillRect(tx, ty, 1, 5); }
-        // 설계도
-        poly(g, [iso(x + .02, y + .2, 8), iso(x + .02, y + d * .55, 8), iso(x + .02, y + d * .55, 17), iso(x + .02, y + .2, 17)], '#dbe9f6');
-        for (let i = 0; i < 4; i++) line(g, iso(x + .02, y + .3, 10 + i * 1.8), iso(x + .02, y + d * .5, 10 + i * 1.8), '#7aa0c8', .5);
-        fbox(c, x, y, w * .3, d * .4, w * .5, d * .32, 7, 0, '#9a6b45'); // 작업대
-        // 만드는 중인 블록 (코드 조각)
+        poly(g, [iso(x + w * .45, y + .02, 6), iso(x + w * .95, y + .02, 6), iso(x + w * .95, y + .02, 17), iso(x + w * .45, y + .02, 17)], '#a07a52'); // 공구판
+        for (let i = 0; i < 5; i++) { const [tx, ty] = iso(x + w * (.5 + i * .09), y + .03, 15); g.fillStyle = '#5d5a55'; g.fillRect(tx, ty, 1, 5); }
+        poly(g, [iso(x + .02, y + d * .2, 8), iso(x + .02, y + d * .55, 8), iso(x + .02, y + d * .55, 17), iso(x + .02, y + d * .2, 17)], '#dbe9f6'); // 설계도
+        for (let i = 0; i < 4; i++) line(g, iso(x + .02, y + d * .25, 10 + i * 1.8), iso(x + .02, y + d * .5, 10 + i * 1.8), '#7aa0c8', .5);
+        fbox(c, x, y, w * .5, d * .45, w * .36, d * .26, 7, 0, '#9a6b45'); // 작업대
         const n = 1 + ((c.t / 900) | 0) % 4;
-        for (let i = 0; i < n; i++) fbox(c, x, y, w * .42 + (i % 2) * .18, d * .46, .16, .16, 3, 7 + Math.floor(i / 2) * 3, SPINES[i + 1]);
-        if (c.on && ((c.t / 120) | 0) % 3 === 0) { const [sx, sy] = iso(x + w * .5, y + d * .55, 12); for (let i = 0; i < 4; i++) circle(g, sx + Math.cos(i * 1.6) * 4, sy + Math.sin(i * 1.6) * 3, .8, '#ffe27a'); }
+        for (let i = 0; i < n; i++) fbox(c, x, y, w * .55 + (i % 2) * .16, d * .5, .14, .14, 3, 7 + Math.floor(i / 2) * 3, SPINES[i + 1]);
+        if (c.on && ((c.t / 120) | 0) % 3 === 0) { const [sx, sy] = iso(x + w * .65, y + d * .6, 12); for (let i = 0; i < 4; i++) circle(g, sx + Math.cos(i * 1.6) * 4, sy + Math.sin(i * 1.6) * 3, .8, '#ffe27a'); }
       },
-      spots: [[.55, .85, 'hammer'], [.85, .55, 'hammer'], [.3, .82, 'work'], [.85, .3, 'work']] });
+      spots: [[.72, .82, 'hammer'], [.9, .6, 'hammer'], [.55, .85, 'work'], [.88, .85, 'work']] });
   } });
 
 def('factory', { name: '공장', group: 'core', role: 'factory', size: [2, 2], desc: 'Bash — 명령을 돌려요',
   draw(c) {
     const grand = c.grand;
-    drawBuilding(c, { h: 20, roofKind: 'saw', winL: 3, winR: 2, rows: [[6, 13]], wall: '#c3c8d0', roof: '#7c8491', floor: '#9aa0a8', inner: '#d6d9de', doorColor: '#59606b',
-      always(c, x, y, w, d, h) {
-        const g = c.g, n = grand ? 2 : 1;
-        for (let k = 0; k < n; k++) {
-          const cx = x + w * (.62 + k * .25), cy = y + .25;
-          cylinder(g, cx, cy, .14, 44 + k * 6, 0, '#b8653e', '#7a3e22');
-          const [sx, sy] = iso(cx, cy, 46 + k * 6);
+    drawCake(c, { h: 20, roofKind: 'gableX', roofH: 8, wall: '#c3c8d0', roof: '#7c8491', rows: [[6, 12]], floor: '#9aa0a8', inner: '#d6d9de', doorColor: '#59606b',
+      always(c, x, y, w, d) {
+        const g = c.g;
+        for (let k = 0; k < (grand ? 2 : 1); k++) {
+          const cx = x + w * (.86 - k * .2), cy = y + .14;
+          cylinder(g, cx, cy, .14, 46 + k * 6, 0, '#b8653e', '#7a3e22');
+          const [sx, sy] = iso(cx, cy, 48 + k * 6);
           if (c.on || c.boom) for (let i = 0; i < 5; i++) puff(g, c.t, sx, sy, i + k, c.boom ? 'rgba(60,55,55,.75)' : 'rgba(255,255,255,.85)', c.boom ? 900 : 2200);
         }
-        if (c.boom) { const [ex, ey] = iso(x + w / 2, y + d, 18); for (let i = 0; i < 14; i++) { const a = i / 14 * Math.PI * 2, r = 4 + ((c.t / 40) % 14); g.globalAlpha = clamp(1 - r / 20, 0, 1); circle(g, ex + Math.cos(a) * r, ey + Math.sin(a) * r * .7, 1.8, i % 2 ? '#ff6a3d' : '#ffd23d'); } g.globalAlpha = 1; if (c.lights) c.lights.push({ x: ex, y: ey, r: 30, color: 'rgba(255,120,40,.7)' }); }
+        if (c.boom) { const [ex, ey] = iso(x + w * .7, y + d * .7, 14); for (let i = 0; i < 14; i++) { const a = i / 14 * Math.PI * 2, r = 4 + ((c.t / 40) % 14); g.globalAlpha = clamp(1 - r / 20, 0, 1); circle(g, ex + Math.cos(a) * r, ey + Math.sin(a) * r * .7, 1.8, i % 2 ? '#ff6a3d' : '#ffd23d'); } g.globalAlpha = 1; if (c.lights) c.lights.push({ x: ex, y: ey, r: 30, color: 'rgba(255,120,40,.7)' }); }
       },
-      interior(c, x, y, w, d, h) {
+      interior(c, x, y, w, d) {
         const g = c.g;
-        // 뒷벽 모니터 (명령 출력)
-        poly(g, [iso(x + w * .15, y + .02, 7), iso(x + w * .6, y + .02, 7), iso(x + w * .6, y + .02, 17), iso(x + w * .15, y + .02, 17)], '#1d2a33');
-        for (let i = 0; i < 4; i++) { const len = .1 + ((hash(i + ((c.t / 400) | 0)) % 100) / 100) * .3; line(g, iso(x + w * .18, y + .03, 15 - i * 2), iso(x + w * (.18 + len), y + .03, 15 - i * 2), c.on ? '#7cf0a0' : '#3f6a52', .8); }
-        if (c.on && c.lights) c.lights.push({ pts: [iso(x + w * .15, y + .02, 7), iso(x + w * .6, y + .02, 7), iso(x + w * .6, y + .02, 17), iso(x + w * .15, y + .02, 17)], color: 'rgba(120,240,160,.25)' });
-        // 기계
-        fbox(c, x, y, .1, d * .25, .5, .5, 12, 0, '#7c8491');
-        const pist = c.on ? Math.abs(Math.sin(c.t / 200)) * 5 : 0;
-        fbox(c, x, y, .25, d * .25 + .15, .2, .2, 4, 12 + pist, '#d0a040');
-        // 컨베이어
-        fbox(c, x, y, w * .2, d * .7, w * .75, .26, 4, 0, '#4a5160', { top: '#3a3f4a' });
-        for (let i = 0; i < 3; i++) { const u = ((c.on ? c.t / 2200 : 0) + i / 3) % 1; fbox(c, x, y, w * (.22 + u * .6), d * .72, .18, .18, 3.5, 4, '#c79a5a'); }
+        const scr = [iso(x + w * .45, y + .02, 7), iso(x + w * .92, y + .02, 7), iso(x + w * .92, y + .02, 17), iso(x + w * .45, y + .02, 17)];
+        poly(g, scr, '#1d2a33'); // 뒷벽 모니터 = 명령 출력
+        for (let i = 0; i < 4; i++) { const len = .08 + ((hash(i + ((c.t / 400) | 0)) % 100) / 100) * .3; line(g, iso(x + w * .48, y + .03, 15 - i * 2), iso(x + w * (.48 + len), y + .03, 15 - i * 2), c.on ? '#7cf0a0' : '#3f6a52', .8); }
+        if (c.on && c.lights) c.lights.push({ pts: scr, color: 'rgba(120,240,160,.3)' });
+        fbox(c, x, y, .08, d * .3, .45, .45, 12, 0, '#7c8491'); // 기계
+        fbox(c, x, y, .2, d * .3 + .12, .2, .2, 4, 12 + (c.on ? Math.abs(Math.sin(c.t / 200)) * 5 : 0), '#d0a040');
+        fbox(c, x, y, w * .35, d * .62, w * .6, .24, 4, 0, '#4a5160', { top: '#3a3f4a' }); // 컨베이어
+        for (let i = 0; i < 3; i++) { const u = ((c.on ? c.t / 2200 : 0) + i / 3) % 1; fbox(c, x, y, w * (.37 + u * .5), d * .64, .16, .16, 3.5, 4, '#c79a5a'); }
       },
-      spots: [[.75, .45, 'type'], [.45, .5, 'work'], [.85, .85, 'work']] });
+      spots: [[.68, .45, 'type'], [.6, .86, 'work'], [.9, .8, 'work']] });
   } });
 
 def('hall', { name: '마을회관', group: 'core', role: 'hall', size: [2, 2], desc: '계획 · 서브에이전트에게 일 나누기',
   draw(c) {
-    const grand = c.grand;
-    drawBuilding(c, { h: grand ? 30 : 26, roofKind: 'gableX', roofH: 13, winL: 2, winR: 3, rows: [[10, 19]], floor: '#b7875a', inner: '#f3eadb',
-      decor: (c, x, y, w, d, h, wall) => { for (let i = 0; i < 4; i++) poly(c.g, faceL(x, y, d, 0, .08 + i * w / 4, .16 + i * w / 4, 3, h - 2), shade(wall, .3)); },
-      top(c, x, y, w, d, h, wall, rc) {
-        const g = c.g, tx = x + w * .35, ty = y + d * .35, tz = h + 9;
-        box(g, tx, ty, .5, .5, 12, tz, shade(wall, .05));
-        const sw = c.ring ? Math.sin(c.t / 110) * .35 : 0, [bx, by] = iso(tx + .25, ty + .5, tz + 4);
+    drawCake(c, { h: c.grand ? 28 : 25, roofKind: 'gableX', roofH: 13, rows: [[10, 18]], floor: '#b7875a', inner: '#f3eadb',
+      decor: (c, x, y, w, d, h, wall, rc, cx) => { for (let i = 0; i < 3; i++) { const u = .06 + i * .25; if (u + .08 < cx - x) poly(c.g, faceL(x, y, d, 0, u, u + .07, 3, h - 2), shade(wall, .3)); } },
+      top(c, x, y, w, d, h, wall, rc, zr) {
+        const g = c.g, tx = x + w * .12, ty = y + d * .12, tz = zr(tx + .25, ty + .25) - 2;
+        box(g, tx, ty, .48, .48, 12, tz, shade(wall, .05));
+        const sw = c.ring ? Math.sin(c.t / 110) * .35 : 0, [bx, by] = iso(tx + .24, ty + .48, tz + 4);
         g.save(); g.translate(bx, by - 5); g.rotate(sw); poly(g, [[-2.6, 4], [2.6, 4], [1.6, 0], [-1.6, 0]], '#e2b33c'); circle(g, 0, 4.4, .9, '#a8801f'); g.restore();
-        hip(g, tx, ty, .5, .5, tz + 12, 9, rc);
+        hip(g, tx, ty, .48, .48, tz + 12, 9, rc);
         if (c.ring) for (let i = 0; i < 2; i++) { const p = ((c.t / 800) + i / 2) % 1; g.globalAlpha = 1 - p; g.fillStyle = '#fff'; g.font = '700 9px sans-serif'; g.fillText('♪', bx + 8 + p * 8 - i * 22, by - 10 - p * 12); g.globalAlpha = 1; }
       },
-      interior(c, x, y, w, d, h) {
+      interior(c, x, y, w, d) {
         const g = c.g;
-        // 게시판: 할 일 = 핀
-        poly(g, [iso(x + w * .2, y + .02, 8), iso(x + w * .8, y + .02, 8), iso(x + w * .8, y + .02, 19), iso(x + w * .2, y + .02, 19)], '#b98a5a');
+        const board = [iso(x + w * .45, y + .02, 8), iso(x + w * .95, y + .02, 8), iso(x + w * .95, y + .02, 19), iso(x + w * .45, y + .02, 19)];
+        poly(g, board, '#b98a5a'); // 게시판: 할 일 = 핀
         const todos = Math.min(8, c.state?.todos ?? 3);
-        for (let i = 0; i < todos; i++) { const u = .25 + (i % 4) * .13, v = 16 - Math.floor(i / 4) * 5; poly(g, [iso(x + w * u, y + .03, v - 3), iso(x + w * (u + .09), y + .03, v - 3), iso(x + w * (u + .09), y + .03, v), iso(x + w * u, y + .03, v)], '#fff7d6'); }
-        // 긴 탁자 + 지도
-        fbox(c, x, y, w * .25, d * .42, w * .55, d * .3, 6, 0, '#8a5e3c');
-        poly(g, [iso(x + w * .32, y + d * .46, 6.1), iso(x + w * .72, y + d * .46, 6.1), iso(x + w * .72, y + d * .66, 6.1), iso(x + w * .32, y + d * .66, 6.1)], '#efe2b8');
-        line(g, iso(x + w * .35, y + d * .55, 6.2), iso(x + w * .68, y + d * .5, 6.2), '#c0503e', .7);
-        for (let i = 0; i < 3; i++) fbox(c, x, y, w * (.3 + i * .17), d * .78, .14, .14, 4, 0, '#6a4428');
+        for (let i = 0; i < todos; i++) { const u = .5 + (i % 4) * .11, v = 16 - Math.floor(i / 4) * 5; poly(g, [iso(x + w * u, y + .03, v - 3), iso(x + w * (u + .08), y + .03, v - 3), iso(x + w * (u + .08), y + .03, v), iso(x + w * u, y + .03, v)], '#fff7d6'); }
+        fbox(c, x, y, w * .45, d * .5, w * .45, d * .24, 6, 0, '#8a5e3c'); // 탁자 + 지도
+        poly(g, [iso(x + w * .5, y + d * .53, 6.1), iso(x + w * .85, y + d * .53, 6.1), iso(x + w * .85, y + d * .7, 6.1), iso(x + w * .5, y + d * .7, 6.1)], '#efe2b8');
+        line(g, iso(x + w * .53, y + d * .6, 6.2), iso(x + w * .82, y + d * .56, 6.2), '#c0503e', .7);
       },
-      spots: [[.5, .25, 'stand'], [.35, .85, 'sit'], [.55, .85, 'sit'], [.72, .85, 'sit'], [.85, .55, 'stand']] });
+      spots: [[.65, .4, 'stand'], [.6, .85, 'sit'], [.8, .85, 'sit'], [.92, .62, 'stand'], [.45, .85, 'sit']] });
   } });
 
 def('post', { name: '우체국', group: 'core', role: 'post', size: [1, 2], desc: 'MCP · 외부 도구와 연락해요',
   draw(c) {
-    drawBuilding(c, { h: c.grand ? 22 : 17, roofKind: c.w >= c.d ? 'gableX' : 'gableY', roofH: 9, roof: '#d6584a', winL: 1, winR: 2, rows: [[6, 12]], floor: '#c9a477', inner: '#f6e6d6', doorColor: '#a8453a',
-      top(c, x, y, w, d, h) {
-        const g = c.g, [ax, ay] = iso(x + w / 2, y + d / 2, h + 8);
+    drawCake(c, { h: c.grand ? 21 : 17, roofKind: c.w >= c.d ? 'gableX' : 'gableY', roofH: 9, roof: '#d6584a', rows: [[6, 12]], floor: '#c9a477', inner: '#f6e6d6', doorColor: '#a8453a',
+      top(c, x, y, w, d, h, wall, rc, zr) {
+        const g = c.g, ax0 = x + w * .5, ay0 = y + d * .18, [ax, ay] = iso(ax0, ay0, zr(ax0, ay0));
         line(g, [ax, ay], [ax, ay - 16], '#6d6a66', 1); circle(g, ax, ay - 17, 1.6, c.on ? '#ff5d4f' : '#a8a29a');
         if (c.on) { for (let r = 1; r <= 3; r++) { const p = ((c.t / 900) + r / 3) % 1; g.globalAlpha = 1 - p; g.strokeStyle = 'rgba(255,190,80,.95)'; g.lineWidth = 1.2; g.beginPath(); g.arc(ax, ay - 17, 3 + p * 12, -2.6, -.5); g.stroke(); } g.globalAlpha = 1; }
       },
       always(c, x, y, w, d) {
-        box(c.g, x + w + .05, y + d * .7, .16, .16, 7, 0, '#d84a3c');
-        if (c.on) { const p = (c.t / 3000) % 1, [ax, ay] = iso(x + w / 2, y + d / 2, 30); const bx = ax + p * 110, by = ay - Math.sin(p * Math.PI) * 26; c.g.globalAlpha = 1 - p * .6; ellipse(c.g, bx, by, 3.2, 2, '#fff'); poly(c.g, [[bx - 1, by], [bx + 1, by - 3 - ((c.t / 140 | 0) % 2) * 2], [bx + 3, by]], '#e9e4dc'); c.g.globalAlpha = 1; }
+        box(c.g, x + w + .05, y + d * .2, .16, .16, 7, 0, '#d84a3c');
+        if (c.on) { const p = (c.t / 3000) % 1, [ax, ay] = iso(x + w / 2, y + d * .2, 30); const bx = ax + p * 110, by = ay - Math.sin(p * Math.PI) * 26; c.g.globalAlpha = 1 - p * .6; ellipse(c.g, bx, by, 3.2, 2, '#fff'); poly(c.g, [[bx - 1, by], [bx + 1, by - 3 - ((c.t / 140 | 0) % 2) * 2], [bx + 3, by]], '#e9e4dc'); c.g.globalAlpha = 1; }
       },
-      interior(c, x, y, w, d, h) {
+      interior(c, x, y, w, d) {
         const g = c.g, along = w >= d ? 'x' : 'y';
-        // 분류함
-        for (let r = 0; r < 3; r++) for (let k = 0; k < 4; k++) {
-          const z = 6 + r * 4;
-          if (along === 'y') { const v = .1 + k * (d - .2) / 4; poly(g, [iso(x + .02, y + v, z), iso(x + .02, y + v + (d - .2) / 4 - .04, z), iso(x + .02, y + v + (d - .2) / 4 - .04, z + 3.4), iso(x + .02, y + v, z + 3.4)], (k + r) % 3 ? '#7a5434' : '#fff6e0'); }
-          else { const u = .1 + k * (w - .2) / 4; poly(g, [iso(x + u, y + .02, z), iso(x + u + (w - .2) / 4 - .04, y + .02, z), iso(x + u + (w - .2) / 4 - .04, y + .02, z + 3.4), iso(x + u, y + .02, z + 3.4)], (k + r) % 3 ? '#7a5434' : '#fff6e0'); }
+        for (let r = 0; r < 3; r++) for (let k = 0; k < 4; k++) { // 분류함
+          const z = 6 + r * 4, col = (k + r) % 3 ? '#7a5434' : '#fff6e0';
+          if (along === 'y') { const v = .1 + k * (d - .2) / 4; poly(g, [iso(x + .02, y + v, z), iso(x + .02, y + v + (d - .2) / 4 - .04, z), iso(x + .02, y + v + (d - .2) / 4 - .04, z + 3.4), iso(x + .02, y + v, z + 3.4)], col); }
+          else { const u = .1 + k * (w - .2) / 4; poly(g, [iso(x + u, y + .02, z), iso(x + u + (w - .2) / 4 - .04, y + .02, z), iso(x + u + (w - .2) / 4 - .04, y + .02, z + 3.4), iso(x + u, y + .02, z + 3.4)], col); }
         }
-        fbox(c, x, y, w * .45, d * .3, w * .4, d * .4, 6, 0, '#a8453a'); // 창구
-        if (c.on) for (let i = 0; i < 3; i++) { const p = (c.t / 1300 + i / 3) % 1, [lx, ly] = iso(x + w * .5, y + d * (.3 + p * .4), 8 + Math.sin(p * Math.PI) * 10); c.g.fillStyle = '#fff'; c.g.fillRect(lx - 2, ly - 1.4, 4, 2.8); }
+        fbox(c, x, y, w * .4, d * .55, w * .5, d * .2, 6, 0, '#a8453a'); // 창구
+        if (c.on) for (let i = 0; i < 3; i++) { const p = (c.t / 1300 + i / 3) % 1, [lx, ly] = iso(x + w * .5, y + d * (.45 + p * .4), 8 + Math.sin(p * Math.PI) * 10); g.fillStyle = '#fff'; g.fillRect(lx - 2, ly - 1.4, 4, 2.8); }
       },
-      spots: [[.6, .82, 'work'], [.3, .55, 'stand']] });
+      spots: [[.6, .88, 'work'], [.4, .5, 'stand']] });
   } });
 
 def('inn', { name: '여관', group: 'core', role: 'inn', size: [2, 2], desc: '쉬는 중 — 촌장이 자요',
   draw(c) {
-    drawBuilding(c, { h: 18, roofKind: 'gableX', roofH: 12, wall: '#d6a473', roof: '#9a5b3a', winL: 2, winR: 2, rows: [[6, 12]], floor: '#b07a4e', inner: '#e9c79e', doorColor: '#6a4428',
-      wallOpt: { left: '#d6a473', right: '#b98858', top: '#e3b98b' },
-      decor: (c, x, y, w, d) => { for (let i = 0; i < 4; i++) poly(c.g, faceL(x, y, d, 0, 0, w, i * 4.5 + 1, i * 4.5 + 1.3), 'rgba(110,70,40,.25)'); const [sx, sy] = iso(x + w * .78, y + d, 9); c.g.fillStyle = '#6a4428'; c.g.fillRect(sx, sy - 3, 10, 6); c.g.fillStyle = '#f6e4c0'; c.g.font = '700 4.5px sans-serif'; c.g.fillText('INN', sx + 1.3, sy + 1.6); },
-      top(c, x, y, w, d, h) { box(c.g, x + w * .7, y + d * .25, .22, .22, 15, h + 2, '#8e6a52'); },
-      always(c, x, y, w, d, h) { const [cx, cy] = iso(x + w * .81, y + d * .36, h + 19); puff(c.g, c.t, cx, cy, 0, 'rgba(255,255,255,.5)', 3000);
-        if (c.on) for (let i = 0; i < 3; i++) { const p = ((c.t / 2400) + i / 3) % 1; c.g.globalAlpha = (1 - p) * .9; c.g.fillStyle = '#fff'; c.g.font = `700 ${7 + i * 2}px sans-serif`; c.g.fillText('z', cx + 6 + p * 10, cy - 6 - p * 18); c.g.globalAlpha = 1; } },
-      interior(c, x, y, w, d, h) {
+    drawCake(c, { h: 18, roofKind: 'gableX', roofH: 12, wall: '#d6a473', roof: '#9a5b3a', rows: [[6, 12]], floor: '#b07a4e', inner: '#e9c79e', doorColor: '#6a4428',
+      decor: (c, x, y, w, d, h, wall, rc, cx, cy) => { for (let i = 0; i < 4; i++) poly(c.g, faceL(x, y, d, 0, 0, cx - x, i * 4.5 + 1, i * 4.5 + 1.3), 'rgba(110,70,40,.25)'); const [sx, sy] = iso(x + w, y + (cy - y) * .5, 12); c.g.fillStyle = '#6a4428'; c.g.fillRect(sx, sy - 3, 10, 6); c.g.fillStyle = '#f6e4c0'; c.g.font = '700 4.5px sans-serif'; c.g.fillText('INN', sx + 1.3, sy + 1.6); },
+      top: (c, x, y, w, d, h, wall, rc, zr) => box(c.g, x + w * .7, y + d * .12, .2, .2, 14, zr(x + w * .8, y + d * .22) - 3, '#8e6a52'),
+      always(c, x, y, w, d, h) { const [cx, cy] = iso(x + w * .8, y + d * .22, h + 26); puff(c.g, c.t, cx, cy, 0, 'rgba(255,255,255,.5)', 3000); },
+      interior(c, x, y, w, d) {
         const g = c.g;
-        // 벽난로
-        fbox(c, x, y, w * .55, .02, .5, .25, 12, 0, '#9a8a7a');
-        const fl = 1 + Math.sin(c.t / 120) * .3, [fx, fy] = iso(x + w * .55 + .25, y + .28, 3);
+        fbox(c, x, y, w * .55, .02, .5, .22, 12, 0, '#9a8a7a'); // 벽난로
+        const fl = 1 + Math.sin(c.t / 120) * .3, [fx, fy] = iso(x + w * .55 + .25, y + .26, 3);
         circle(g, fx, fy, 2.4 * fl, '#ff9a3a'); circle(g, fx, fy - 1, 1.3 * fl, '#ffe27a');
         if (c.lights) c.lights.push({ x: fx, y: fy, r: 22, color: 'rgba(255,150,60,.5)' });
-        // 침대 둘
-        for (let i = 0; i < 2; i++) { fbox(c, x, y, .1, .15 + i * d * .45, .55, .35, 4, 0, '#8a5e3c'); fbox(c, x, y, .1, .15 + i * d * .45, .16, .35, 5.5, 0, '#f4efe4'); fbox(c, x, y, .26, .15 + i * d * .45, .38, .35, 1, 4, i ? '#5b7fb5' : '#c0503e'); }
-        poly(g, [iso(x + w * .4, y + d * .5), iso(x + w * .85, y + d * .5), iso(x + w * .85, y + d * .9), iso(x + w * .4, y + d * .9)], '#c25d4a');
+        poly(g, [iso(x + w * .45, y + d * .45), iso(x + w * .95, y + d * .45), iso(x + w * .95, y + d * .95), iso(x + w * .45, y + d * .95)], '#c25d4a'); // 깔개
+        for (let i = 0; i < 2; i++) { const bx = w * (.5 + i * .25); fbox(c, x, y, bx, d * .5, .36, .55, 4, 0, '#8a5e3c'); fbox(c, x, y, bx, d * .5, .36, .14, 5.5, 0, '#f4efe4'); fbox(c, x, y, bx, d * .64, .36, .4, 1, 4, i ? '#5b7fb5' : '#c0503e'); }
       },
-      spots: [[.2, .25, 'sleep'], [.2, .7, 'sleep'], [.65, .7, 'sit']] });
+      spots: [[.58, .62, 'sleep'], [.83, .62, 'sleep'], [.6, .9, 'sit']] });
   } });
 
 // ━━ 특색 건물 (마을 스타일마다) ━━
